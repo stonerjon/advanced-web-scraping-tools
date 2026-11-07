@@ -1,77 +1,51 @@
-import re
-from typing import List, Set
-from urllib.parse import urljoin, urlparse
+from __future__ import annotations
 
+from typing import Dict, List, Set
+
+import dns.exception
+import dns.resolver
 import httpx
 
 
-class APIInventory:
-    """Collects API and service endpoints from HTML, JS, and discovery responses."""
+class DomainRecon:
+    """Passive certificate and basic DNS inventory; does not brute-force DNS."""
 
-    PATTERNS = [
-        r'https?://[^\s"\'<>]+(?:/api(?:/|[?/#])[^\s"\'<>]*)',
-        r'/(?:v\d+|api|graphql|openapi|swagger|oauth|auth|rest)[^\s"\'<>]*',
-        r'["\'](?:/v\d+|/api|/graphql|/openapi|/swagger|/auth)[^"\'\s<>]*',
-        r'(?i)(?:api|graphql|swagger|openapi|oauth|auth)[^\s"\'<>]*',
-    ]
+    def __init__(self, domain: str):
+        self.domain = domain.strip().lower().rstrip(".")
+        if not self.domain or "/" in self.domain or " " in self.domain:
+            raise ValueError("Provide a valid bare domain name (for example, example.org).")
+        self.subdomains: Set[str] = set()
 
-    def __init__(self, base_url: str, client: httpx.Client | None = None):
-        self.base_url = base_url.rstrip("/")
-        self.client = client or httpx.Client(follow_redirects=True, timeout=10.0)
-        self.endpoints: Set[str] = set()
+    def _clean(self, names: List[str]) -> List[str]:
+        suffix = "." + self.domain
+        return sorted({name.strip().lower().rstrip(".") for name in names
+                       if name.strip() and "*" not in name and
+                       (name.strip().lower().rstrip(".") == self.domain or name.strip().lower().rstrip(".").endswith(suffix))})
 
-    def _normalize_url(self, value: str) -> str:
-        value = value.strip().strip('"\'')
-        if not value:
-            return ""
-        if value.startswith("http://") or value.startswith("https://"):
-            return value
-        if value.startswith("/"):
-            return urljoin(self.base_url + "/", value)
-        return urljoin(self.base_url + "/", value)
+    def crtsh(self) -> List[str]:
+        try:
+            response = httpx.get("https://crt.sh/", params={"q": f"%.{self.domain}", "output": "json"}, timeout=15.0)
+            response.raise_for_status()
+            rows = response.json()
+            names = [name for row in rows if isinstance(row, dict) for name in row.get("name_value", "").splitlines()]
+            results = self._clean(names)
+            self.subdomains.update(results)
+            return results
+        except (httpx.HTTPError, ValueError, TypeError):
+            return []
 
-    def _looks_like_api(self, url: str) -> bool:
-        path = urlparse(url).path.lower()
-        markers = [
-            "/api",
-            "/graphql",
-            "/oauth",
-            "/auth",
-            "/swagger",
-            "/openapi",
-            "/rest",
-            "/v1",
-            "/v2",
-            "/v3",
-        ]
-        return any(marker in path for marker in markers)
+    def dns_probe(self) -> Dict[str, List[str]]:
+        records: Dict[str, List[str]] = {kind: [] for kind in ("A", "AAAA", "CNAME", "MX", "NS", "TXT")}
+        resolver = dns.resolver.Resolver()
+        resolver.lifetime = 4.0
+        for kind in records:
+            try:
+                records[kind] = [str(answer) for answer in resolver.resolve(self.domain, kind)]
+            except (dns.exception.DNSException, OSError):
+                continue
+        return records
 
-    def extract_from_text(self, content: str) -> List[str]:
-        found: List[str] = []
-        for pattern in self.PATTERNS:
-            matches = re.findall(pattern, content, flags=re.IGNORECASE)
-            for match in matches:
-                normalized = self._normalize_url(match)
-                if normalized and self._looks_like_api(normalized):
-                    found.append(normalized)
-        return sorted(set(found))
-
-    def scan_url(self, url: str) -> List[str]:
-        response = self.client.get(url, timeout=10.0)
-        response.raise_for_status()
-        endpoints = self.extract_from_text(response.text)
-        self.endpoints.update(endpoints)
-        return sorted(self.endpoints)
-
-    def scan_html(self, html: str) -> List[str]:
-        endpoints = self.extract_from_text(html)
-        self.endpoints.update(endpoints)
-        return sorted(self.endpoints)
-
-    def scan_asset_url(self, url: str) -> dict:
-        response = self.client.get(url, timeout=10.0)
-        response.raise_for_status()
-        return {
-            "url": url,
-            "endpoints": self.extract_from_text(response.text),
-        }
+    def run(self) -> dict:
+        cert_names = self.crtsh()
+        return {"domain": self.domain, "subdomains": cert_names, "dns": self.dns_probe(),
+                "sources": {"certificate_transparency": "available" if cert_names else "unavailable_or_empty"}}

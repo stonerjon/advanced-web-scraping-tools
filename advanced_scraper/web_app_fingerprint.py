@@ -1,94 +1,33 @@
 from __future__ import annotations
 
-import re
-from typing import Dict, List, Set
+from typing import Any, Dict
 
-import dns.exception
-import dns.name
-import dns.resolver
 import httpx
 
 
-class DomainRecon:
-    """Passive, low-noise reconnaissance for domains and subdomains."""
+class WebAppFingerprint:
+    """Lightweight read-only response and technology-header inspection."""
 
-    COMMON_SUBDOMAINS = [
-        "www",
-        "mail",
-        "api",
-        "admin",
-        "dev",
-        "staging",
-        "login",
-        "app",
-        "portal",
-        "assets",
-        "cdn",
-        "internal",
-        "beta",
-        "www2",
-    ]
+    def __init__(self, client: httpx.Client | None = None):
+        self.client = client or httpx.Client(follow_redirects=True, timeout=10.0)
 
-    def __init__(self, domain: str):
-        self.domain = domain.strip().lower().strip(".")
-        self.subdomains: Set[str] = set()
-
-    def _clean_subdomains(self, values: List[str]) -> List[str]:
-        cleaned: Set[str] = set()
-        for value in values:
-            item = value.strip().lower().rstrip(".")
-            if not item or item == self.domain:
-                continue
-            if self.domain in item and "*" not in item:
-                cleaned.add(item)
-        return sorted(cleaned)
-
-    def crtsh(self) -> List[str]:
-        try:
-            response = httpx.get(f"https://crt.sh/?q=%25.{self.domain}&output=json", timeout=20.0)
-            response.raise_for_status()
-            data = response.json()
-            names: List[str] = []
-            for item in data:
-                name_value = item.get("name_value", "")
-                if name_value:
-                    names.extend(name_value.split("\n"))
-            found = self._clean_subdomains(names)
-            self.subdomains.update(found)
-            return found
-        except Exception:
-            return []
-
-    def common_candidates(self) -> List[str]:
-        names = [f"{prefix}.{self.domain}" for prefix in self.COMMON_SUBDOMAINS]
-        self.subdomains.update(names)
-        return sorted(names)
-
-    def dns_probe(self) -> Dict[str, List[str]]:
-        resolver = dns.resolver.Resolver()
-        records: Dict[str, List[str]] = {
-            "A": [],
-            "AAAA": [],
-            "CNAME": [],
-            "MX": [],
-            "NS": [],
+    def fingerprint(self, url: str) -> Dict[str, Any]:
+        response = self.client.get(url)
+        headers = {key.lower(): value for key, value in response.headers.items()}
+        text = response.text[:500_000].lower()
+        signals = {
+            "wordpress": "wp-content" in text,
+            "react": "react" in text or "__next" in text,
+            "django": "csrftoken" in str(response.headers.get("set-cookie", "")).lower(),
+            "express": headers.get("x-powered-by", "").lower() == "express",
+            "cloudflare": "cloudflare" in headers.get("server", "").lower() or "cf-ray" in headers,
         }
-        for record_type in records:
-            try:
-                answers = resolver.resolve(self.domain, record_type)
-                records[record_type] = [str(item) for item in answers]
-            except (dns.exception.DNSException, Exception):
-                pass
-        return records
-
-    def run(self) -> Dict[str, object]:
-        subs = []
-        subs.extend(self.crtsh())
-        subs.extend(self.common_candidates())
-        uniq = sorted(set(subs))
-        self.subdomains = set(uniq)
         return {
-            "domain": self.domain,
-            "subdomains": uniq,
-            "dns": self.dns_probe(),
+            "url": str(response.url), "status_code": response.status_code,
+            "server": headers.get("server"), "x_powered_by": headers.get("x-powered-by"),
+            "content_type": headers.get("content-type"),
+            "frameworks": sorted(name for name, present in signals.items() if present),
+            "security_headers": {name: headers.get(name) for name in (
+                "strict-transport-security", "x-frame-options", "x-content-type-options",
+                "content-security-policy", "referrer-policy")},
         }

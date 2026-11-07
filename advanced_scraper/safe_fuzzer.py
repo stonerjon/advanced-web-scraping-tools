@@ -1,59 +1,38 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+import time
+from typing import Dict, List
+from urllib.parse import urlsplit
 
 import httpx
 
 
-class WebAppFingerprint:
-    """Perform lightweight application fingerprinting with safe, read-only requests."""
+class SafeFuzzer:
+    """Rate-limited GET-only path inventory for explicitly authorized targets."""
 
-    def __init__(self, client: httpx.Client | None = None):
-        self.client = client or httpx.Client(follow_redirects=True, timeout=10.0)
+    DEFAULT_PATHS = ["", "api", "api/v1", "graphql", "swagger", "openapi.json", "health", "status", "robots.txt", "sitemap.xml"]
 
-    def fingerprint(self, url: str) -> Dict[str, Any]:
-        response = self.client.get(url, timeout=10.0)
-        body = (response.text or "").lower()
-        headers = {k.lower(): v for k, v in response.headers.items()}
+    def __init__(self, base_url: str, wordlist: List[str] | None = None, delay: float = 0.5):
+        parsed = urlsplit(base_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("Target must be an absolute http(s) URL.")
+        self.base_url = base_url.rstrip("/")
+        self.wordlist = wordlist if wordlist is not None else self.DEFAULT_PATHS
+        self.delay = max(0.0, delay)
 
-        framework_signals = {
-            "nginx": ["nginx", "x-powered-by: nginx"],
-            "apache": ["apache"],
-            "gunicorn": ["gunicorn"],
-            "django": ["django", "x-frame-options"],
-            "flask": ["flask", "werkzeug"],
-            "express": ["express", "x-powered-by: express"],
-            "wordpress": ["wp-content", "wordpress"],
-            "php": ["php", "x-powered-by: php"],
-            "asp.net": ["asp.net", "x-aspnet-version"],
-            "react": ["react", "__next"],
-        }
-
-        detected: List[str] = []
-        for name, patterns in framework_signals.items():
-            if any(pattern in body for pattern in patterns):
-                detected.append(name)
-
-        detected.extend(
-            [
-                "cloudflare"
-                for key, value in headers.items()
-                if "cloudflare" in str(key).lower() or "cloudflare" in str(value).lower()
-            ]
-        )
-
-        return {
-            "url": url,
-            "status_code": response.status_code,
-            "server": headers.get("server"),
-            "x_powered_by": headers.get("x-powered-by"),
-            "content_type": headers.get("content-type"),
-            "redirected": response.history and len(response.history) > 0,
-            "frameworks": sorted(set(detected)),
-            "security_headers": {
-                "strict_transport_security": headers.get("strict-transport-security"),
-                "x_frame_options": headers.get("x-frame-options"),
-                "x_content_type_options": headers.get("x-content-type-options"),
-                "content_security_policy": headers.get("content-security-policy"),
-            },
-        }
+    def probe_paths(self) -> List[Dict[str, object]]:
+        results: List[Dict[str, object]] = []
+        with httpx.Client(timeout=5.0, follow_redirects=False) as client:
+            for path in self.wordlist:
+                url = f"{self.base_url}/{path.lstrip('/')}" if path else self.base_url
+                try:
+                    response = client.get(url)
+                    if response.status_code not in (404, 410):
+                        results.append({"url": url, "status_code": response.status_code,
+                                        "content_type": response.headers.get("content-type"),
+                                        "location": response.headers.get("location")})
+                except httpx.HTTPError as exc:
+                    results.append({"url": url, "error": type(exc).__name__, "message": str(exc)})
+                if self.delay:
+                    time.sleep(self.delay)
+        return results

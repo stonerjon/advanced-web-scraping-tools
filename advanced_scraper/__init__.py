@@ -1,94 +1,23 @@
-import argparse
-import json
+"""Core safe reconnaissance helpers."""
 
-from advanced_scraper.api_inventory import APIInventory
-from advanced_scraper.domain_recon import DomainRecon
-from advanced_scraper.safe_fuzzer import SafeFuzzer
-from advanced_scraper.vuln_enumerator import SafeVulnEnumerator
-from advanced_scraper.web_app_fingerprint import WebAppFingerprint
+__all__ = ["APIInventory", "DomainRecon", "WebAppFingerprint", "SafeFuzzer", "SafeVulnEnumerator"]
 
 
-def _print_json(data):
-    print(json.dumps(data, indent=2, default=str))
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Advanced API, Web App, Domain, and Safe Recon Toolkit")
-    subparsers = parser.add_subparsers(dest="command", help="Available commands")
-
-    scrape_parser = subparsers.add_parser("scrape", help="Stealthy scrape and AI extraction")
-    scrape_parser.add_argument("url")
-    scrape_parser.add_argument("--schema", default='{"data": "string"}')
-    scrape_parser.add_argument("--provider", default="ollama")
-
-    recon_parser = subparsers.add_parser("recon", help="Run domain reconnaissance and subdomain discovery")
-    recon_parser.add_argument("domain")
-
-    subdomain_parser = subparsers.add_parser("subdomains", help="Enumerate likely subdomains")
-    subdomain_parser.add_argument("domain")
-
-    api_parser = subparsers.add_parser("api-scan", help="Scan a URL for API endpoints")
-    api_parser.add_argument("url")
-
-    fp_parser = subparsers.add_parser("fingerprint", help="Fingerprint the target web application")
-    fp_parser.add_argument("url")
-
-    vuln_parser = subparsers.add_parser("vuln", help="Run safe vulnerability enumeration checks")
-    vuln_parser.add_argument("url")
-
-    fuzz_parser = subparsers.add_parser("fuzz", help="Probe common paths and API routes")
-    fuzz_parser.add_argument("url")
-    fuzz_parser.add_argument("--wordlist", nargs="*", default=None)
-
-    args = parser.parse_args()
-
-    if args.command == "scrape":
-        from advanced_scraper.agents import ScrapingAgent
-
-        schema = json.loads(args.schema)
-        agent = ScrapingAgent(ai_provider=args.provider)
-        result = agent.quick_scrape(args.url, schema)
-        _print_json(result)
-
-    elif args.command in {"recon", "subdomains", "domain"}:
-        domain = args.domain if hasattr(args, "domain") else args.target
-        recon = DomainRecon(domain)
-        _print_json(recon.run())
-
-    elif args.command == "api-scan":
-        inventory = APIInventory(args.url)
-        _print_json({"url": args.url, "endpoints": inventory.scan_url(args.url)})
-
-    elif args.command == "fingerprint":
-        fingerprint = WebAppFingerprint()
-        _print_json(fingerprint.fingerprint(args.url))
-
-    elif args.command == "vuln":
-        evaluator = SafeVulnEnumerator()
-        _print_json(evaluator.run(args.url))
-
-    elif args.command == "fuzz":
-        wordlist = args.wordlist or [
-            "",
-            "api",
-            "api/v1",
-            "api/v2",
-            "graphql",
-            "swagger",
-            "openapi.json",
-            "health",
-            "status",
-            "robots.txt",
-            "sitemap.xml",
-            "admin",
-            "login",
-        ]
-        fuzzer = SafeFuzzer(args.url, wordlist=wordlist)
-        _print_json({"url": args.url, "results": fuzzer.probe_paths()})
-
-    else:
-        parser.print_help()
-
-
-if __name__ == "__main__":
-    main()
+def __getattr__(name):
+    # Lazy imports keep optional/network-facing modules from breaking unrelated CLI commands.
+    if name == "APIInventory":
+        from .api_inventory import APIInventory
+        return APIInventory
+    if name == "DomainRecon":
+        from .domain_recon import DomainRecon
+        return DomainRecon
+    if name == "WebAppFingerprint":
+        from .web_app_fingerprint import WebAppFingerprint
+        return WebAppFingerprint
+    if name == "SafeFuzzer":
+        from .safe_fuzzer import SafeFuzzer
+        return SafeFuzzer
+    if name == "SafeVulnEnumerator":
+        from .vuln_enumerator import SafeVulnEnumerator
+        return SafeVulnEnumerator
+    raise AttributeError(name)
