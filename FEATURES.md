@@ -1,24 +1,6 @@
 ````markdown
 # 🏴‍☠️ Advanced Web Scraper & Recon Toolkit
 
-**Captain ShearWater Slasher's Arsenal** — A comprehensive, production-ready web scraping and OSINT toolkit with AI integration, real-time monitoring, and IP leak protection.
-
-```
-╔═══════════════════════════════════════════════════════════════════╗
-║                                                                   ║
-║       🏴‍☠️  ADVANCED WEB SCRAPER & RECON TOOLKIT 🏴‍☠️              ║
-║                                                                   ║
-║                  Captain ShearWater Slasher                       ║
-║             SlumberSnooze Skiff - Production Ready                ║
-║                                                                   ║
-║              Free & Open Source • LLM-Ready • Scalable             ║
-║                      PirateCove Software v1.0                     ║
-║                                                                   ║
-╚═══════════════════════════════════════════════════════════════════╝
-```
-
----
-
 ## 🎯 Key Features
 
 ### ✅ **IP Leak Detection & Prevention** 🛑
